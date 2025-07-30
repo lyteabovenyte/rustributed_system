@@ -48,7 +48,6 @@ impl Node<(), Payload> for BroadcastNode {
                 serde_json::to_writer(&mut *output, &reply)
                     .context("serialize response to broadcast")?;
                 output.write_all(b"\n").context("write trailing newline")?;
-                self.id += 1;
             }
             Payload::Read => {
                 reply.body.payload = Payload::ReadOk {
@@ -57,14 +56,12 @@ impl Node<(), Payload> for BroadcastNode {
                 serde_json::to_writer(&mut *output, &reply)
                     .context("serialize response to read")?;
                 output.write_all(b"\n").context("write trailing newline")?;
-                self.id += 1;
             }
             Payload::Topology { topology: _ } => {
                 reply.body.payload = Payload::TopologyOk;
                 serde_json::to_writer(&mut *output, &reply)
                     .context("serialize response to topology")?;
                 output.write_all(b"\n").context("write trailing newline")?;
-                self.id += 1;
             }
             Payload::BroadcastOk | Payload::ReadOk { .. } | Payload::TopologyOk => {}
         }
