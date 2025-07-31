@@ -1,11 +1,11 @@
-use rustributed_system::*;
-
 use anyhow::Context;
+use rand::prelude::*;
+use rustributed_system::*;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use std::{
     collections::{HashMap, HashSet},
-    io::{StdoutLock, Write},
+    io::StdoutLock,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -39,7 +39,6 @@ struct BroadcastNode {
     messages: HashSet<usize>,
     known: HashMap<String, HashSet<usize>>,
     neighborhood: Vec<String>,
-    msg_communicated: HashMap<String, HashSet<usize>>,
 }
 
 impl Node<(), Payload, InjectedPayload> for BroadcastNode {
@@ -53,7 +52,7 @@ impl Node<(), Payload, InjectedPayload> for BroadcastNode {
             // TODO: handle EOF signals.
             loop {
                 std::thread::sleep(Duration::from_millis(300));
-                if let Err(_) = tx.send(Event::Injected(InjectedPayload::Gossip)) {
+                if tx.send(Event::Injected(InjectedPayload::Gossip)).is_err() {
                     break;
                 }
             }
@@ -68,7 +67,6 @@ impl Node<(), Payload, InjectedPayload> for BroadcastNode {
                 .map(|nid| (nid, HashSet::new()))
                 .collect(),
             neighborhood: Vec::new(),
-            msg_communicated: HashMap::new(),
         })
     }
     fn step(
@@ -82,20 +80,29 @@ impl Node<(), Payload, InjectedPayload> for BroadcastNode {
                 InjectedPayload::Gossip => {
                     for n in &self.neighborhood {
                         let known_to_n = &self.known[n];
+                        let (already_known, mut notify_of): (HashSet<_>, HashSet<_>) = self
+                            .messages
+                            .iter()
+                            .copied()
+                            .partition(|m| !known_to_n.contains(m));
+                        eprintln!("notify of {}/{}", notify_of.len(), self.messages.len());
+
+                        // include some extra messages to let them know that we have that message.
+                        let mut rng = rand::thread_rng();
+                        notify_of.extend(already_known.iter().filter(|_| {
+                            rng.gen_ratio(
+                                10.min(already_known.len() as u32),
+                                already_known.len() as u32,
+                            )
+                        }));
+
                         Message {
                             src: self.node.clone(),
                             dst: n.clone(),
                             body: Body {
                                 id: None,
                                 in_reply_to: None,
-                                payload: Payload::Gossip {
-                                    seen: self
-                                        .messages
-                                        .iter()
-                                        .copied()
-                                        .filter(|m| !known_to_n.contains(m))
-                                        .collect(),
-                                },
+                                payload: Payload::Gossip { seen: notify_of },
                             },
                         }
                         .send(&mut *output)
@@ -108,6 +115,10 @@ impl Node<(), Payload, InjectedPayload> for BroadcastNode {
                 let mut reply = input.into_reply(Some(&mut self.id));
                 match reply.body.payload {
                     Payload::Gossip { seen } => {
+                        self.known
+                            .get_mut(&reply.dst)
+                            .expect("got gossip from unknown node")
+                            .extend(seen.iter().copied());
                         self.messages.extend(seen);
                     }
                     Payload::Broadcast { message } => {
